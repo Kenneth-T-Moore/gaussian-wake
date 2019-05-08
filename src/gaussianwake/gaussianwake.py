@@ -1,10 +1,10 @@
 import numpy as np
 from scipy.integrate import quad
 from scipy.io import loadmat
-import pylab as plt
+import matplotlib.pylab as plt
 import time
 
-from openmdao.api import Component, Problem, Group
+from openmdao.api import ExplicitComponent, Problem, Group
 
 from _porteagel_fortran import porteagel_analyze as porteagel_analyze_fortran
 from _porteagel_fortran import porteagel_visualize as porteagel_visualize_fortran
@@ -151,21 +151,14 @@ def porteagel_visualize(nTurbines, nSamples, turbineXw, turbineYw, turbineZ, vel
     return ws_array
 
 
-class GaussianWake(Component):
+class GaussianWake(ExplicitComponent):
 
-    def __init__(self, nTurbines, direction_id=0, options=None):
-        super(GaussianWake, self).__init__()
+    def __init__(self, nTurbines=0, direction_id=0, options=None):
 
         import warnings
 
-        self.deriv_options['type'] = 'user'
-        # self.deriv_options['form'] = 'central'
-        # self.deriv_options['step_size'] = 1.0e-12
-        # self.deriv_options['step_calc'] = 'relative'
-
         self.nTurbines = nTurbines
         self.direction_id = direction_id
-
         if options is None:
             self.radius_multiplier = 1.0
             self.nSamples = nSamples = 0
@@ -204,114 +197,112 @@ class GaussianWake(Component):
                 warnings.warn('Ct values must be <= 1, clipping provided values accordingly')
                 self.ct_curve_ct = np.clip(self.ct_curve_ct, a_max=ct_max, a_min=None)
 
-        # unused but required for compatibility
+    def setup(self):
 
-        # self.add_param('wakeCentersYT', np.zeros(nTurbines*nTurbines), units='m')
-        # self.add_param('wakeDiametersT', np.zeros(nTurbines*nTurbines), units='m')
-        # self.add_param('wakeOverlapTRel', np.zeros(nTurbines*nTurbines))
-
-        # used
-        self.add_param('turbineXw', val=np.zeros(nTurbines), units='m')
-        self.add_param('turbineYw', val=np.zeros(nTurbines), units='m')
-        self.add_param('hubHeight', val=np.ones(nTurbines)*90.0, units='m')
-        self.add_param('yaw%i' % direction_id, np.zeros(nTurbines), units='deg')
-        self.add_param('rotorDiameter', val=np.zeros(nTurbines)+126.4, units='m')
-        self.add_param('Ct', np.zeros(nTurbines), desc='Turbine thrust coefficients')
-        self.add_param('wind_speed', val=8.0, units='m/s')
-        self.add_param('axialInduction', val=np.zeros(nTurbines)+1./3.)
+        self.add_input('turbineXw', val=np.zeros(nTurbines), units='m')
+        self.add_input('turbineYw', val=np.zeros(nTurbines), units='m')
+        self.add_input('hubHeight', val=np.ones(nTurbines)*90.0, units='m')
+        self.add_input('yaw%i' % self.direction_id, np.zeros(nTurbines), units='deg')
+        self.add_input('rotorDiameter', val=np.zeros(nTurbines)+126.4, units='m')
+        self.add_input('Ct', np.zeros(nTurbines), desc='Turbine thrust coefficients')
+        self.add_input('wind_speed', val=8.0, units='m/s')
+        self.add_input('axialInduction', val=np.zeros(nTurbines)+1./3.)
 
         # options
-        # self.add_param('language', val='fortran')
+        # self.add_input('language', val='fortran')
 
-        # params for Bastankhah with yaw
-        self.add_param('model_params:ky', val=0.022, pass_by_object=True)
-        self.add_param('model_params:kz', val=0.022, pass_by_object=True)
-        self.add_param('model_params:alpha', val=2.32, pass_by_object=True)
-        self.add_param('model_params:beta', val=0.154, pass_by_object=True)
-        self.add_param('model_params:I', val=0.075, pass_by_object=True, desc='turbulence intensity')
-        self.add_param('model_params:z_ref', val=80.0, pass_by_object=True, desc='wind speed measurement height')
-        self.add_param('model_params:z_0', val=0.0, pass_by_object=True, desc='ground height')
-        self.add_param('model_params:shear_exp', val=0.15, pass_by_object=True, desc='wind shear calculation exponent')
-        self.add_param('model_params:wake_combination_method', val=1, pass_by_object=True,
+        # inputs for Bastankhah with yaw
+        self.add_input('model_params:ky', val=0.022, pass_by_object=True)
+        self.add_input('model_params:kz', val=0.022, pass_by_object=True)
+        self.add_input('model_params:alpha', val=2.32, pass_by_object=True)
+        self.add_input('model_params:beta', val=0.154, pass_by_object=True)
+        self.add_input('model_params:I', val=0.075, pass_by_object=True, desc='turbulence intensity')
+        self.add_input('model_params:z_ref', val=80.0, pass_by_object=True, desc='wind speed measurement height')
+        self.add_input('model_params:z_0', val=0.0, pass_by_object=True, desc='ground height')
+        self.add_input('model_params:shear_exp', val=0.15, pass_by_object=True, desc='wind shear calculation exponent')
+        self.add_input('model_params:wake_combination_method', val=1, pass_by_object=True,
                        desc='select how the wakes should be combined')
-        self.add_param('model_params:ti_calculation_method', val=2, pass_by_object=True,
+        self.add_input('model_params:ti_calculation_method', val=2, pass_by_object=True,
                        desc='select how the wakes should be combined')
-        self.add_param('model_params:calc_k_star', val=True, pass_by_object=True,
+        self.add_input('model_params:calc_k_star', val=True, pass_by_object=True,
                        desc='choose to calculate wake expansion based on TI if True')
-        self.add_param('model_params:sort', val=True, pass_by_object=True,
+        self.add_input('model_params:sort', val=True, pass_by_object=True,
                        desc='decide whether turbines should be sorted before solving for directional power')
-        self.add_param('model_params:RotorPointsY', val=np.zeros(nRotorPoints), pass_by_object=True,
+        self.add_input('model_params:RotorPointsY', val=np.zeros(nRotorPoints), pass_by_object=True,
                        desc='rotor swept area sampling Y points centered at (y,z)=(0,0) normalized by rotor radius')
-        self.add_param('model_params:RotorPointsZ', val=np.zeros(nRotorPoints), pass_by_object=True,
+        self.add_input('model_params:RotorPointsZ', val=np.zeros(nRotorPoints), pass_by_object=True,
                        desc='rotor swept area sampling Z points centered at (y,z)=(0,0) normalized by rotor radius')
-        self.add_param('model_params:print_ti', val=False, pass_by_object=True,
+        self.add_input('model_params:print_ti', val=False, pass_by_object=True,
                        desc='print TI values to a file for use in plotting etc')
-        self.add_param('model_params:wake_model_version', val=2016, pass_by_object=True,
+        self.add_input('model_params:wake_model_version', val=2016, pass_by_object=True,
                        desc='choose whether to use Bastankhah 2014 or 2016')
 
-        self.add_param('model_params:wec_factor', val=1.0, pass_by_object=True,
+        self.add_input('model_params:wec_factor', val=1.0, pass_by_object=True,
                        desc='increase spread for optimization')
 
-        self.add_param('model_params:sm_smoothing', val=700.0, pass_by_object=True,
+        self.add_input('model_params:sm_smoothing', val=700.0, pass_by_object=True,
                        desc='adjust degree of smoothing in the smooth-max for local TI calcs')
 
-        self.add_param('model_params:exp_rate_multiplier', val=1.0, pass_by_object=True,
+        self.add_input('model_params:exp_rate_multiplier', val=1.0, pass_by_object=True,
                        desc='multiply wake expansion rate as wec alternative')
 
-        self.add_output('wtVelocity%i' % direction_id, val=np.zeros(nTurbines), units='m/s')
+        self.add_output('wtVelocity%i' % self.direction_id, val=np.zeros(nTurbines), units='m/s')
 
+        nSamples = self.nSamples
         if nSamples > 0:
             # visualization input
-            self.add_param('wsPositionXw', np.zeros(nSamples), units='m', pass_by_object=True,
+            self.add_input('wsPositionXw', np.zeros(nSamples), units='m', pass_by_object=True,
                            desc='downwind position of desired measurements in wind ref. frame')
-            self.add_param('wsPositionYw', np.zeros(nSamples), units='m', pass_by_object=True,
+            self.add_input('wsPositionYw', np.zeros(nSamples), units='m', pass_by_object=True,
                            desc='crosswind position of desired measurements in wind ref. frame')
-            self.add_param('wsPositionZ', np.zeros(nSamples), units='m', pass_by_object=True,
+            self.add_input('wsPositionZ', np.zeros(nSamples), units='m', pass_by_object=True,
                            desc='position of desired measurements in wind ref. frame')
 
             # visualization output
-            self.add_output('wsArray%i' % direction_id, np.zeros(nSamples), units='m/s', pass_by_object=True,
+            self.add_output('wsArray%i' % self.direction_id, np.zeros(nSamples), units='m/s', pass_by_object=True,
                             desc='wind speed at measurement locations')
 
-    def solve_nonlinear(self, params, unknowns, resids):
+        self.declare_partials('*', '*')
+
+    def compute(self, inputs, outputs):
 
         nTurbines = self.nTurbines
         direction_id = self.direction_id
         nSamples = self.nSamples
 
-        # params for Bastankhah model with yaw
-        ky = params['model_params:ky']
-        kz = params['model_params:kz']
-        alpha = params['model_params:alpha']
-        beta = params['model_params:beta']
-        I = params['model_params:I']
-        wake_combination_method = params['model_params:wake_combination_method']
-        ti_calculation_method = params['model_params:ti_calculation_method']
-        calc_k_star = params['model_params:calc_k_star']
-        sort_turbs = params['model_params:sort']
-        RotorPointsY = params['model_params:RotorPointsY']
-        RotorPointsZ = params['model_params:RotorPointsZ']
-        z_ref = params['model_params:z_ref']
-        z_0 = params['model_params:z_0']
-        shear_exp = params['model_params:shear_exp']
-        wake_model_version = params['model_params:wake_model_version']
+        # inputs for Bastankhah model with yaw
+        ky = inputs['model_params:ky']
+        kz = inputs['model_params:kz']
+        alpha = inputs['model_params:alpha']
+        beta = inputs['model_params:beta']
+        I = inputs['model_params:I']
+        wake_combination_method = inputs['model_params:wake_combination_method']
+        ti_calculation_method = inputs['model_params:ti_calculation_method']
+        calc_k_star = inputs['model_params:calc_k_star']
+        sort_turbs = inputs['model_params:sort']
+        RotorPointsY = inputs['model_params:RotorPointsY']
+        RotorPointsZ = inputs['model_params:RotorPointsZ']
+        z_ref = inputs['model_params:z_ref']
+        z_0 = inputs['model_params:z_0']
+        shear_exp = inputs['model_params:shear_exp']
+        wake_model_version = inputs['model_params:wake_model_version']
 
-        wec_factor = params['model_params:wec_factor']
+        wec_factor = inputs['model_params:wec_factor']
 
-        print_ti = params['model_params:print_ti']
+        print_ti = inputs['model_params:print_ti']
 
-        sm_smoothing = params['model_params:sm_smoothing']
-        exp_rate_multiplier = params['model_params:exp_rate_multiplier']
+        sm_smoothing = inputs['model_params:sm_smoothing']
+        exp_rate_multiplier = inputs['model_params:exp_rate_multiplier']
 
 
         # rename inputs and outputs
-        turbineXw = params['turbineXw']
-        turbineYw = params['turbineYw']
-        turbineZ = params['hubHeight']
-        yaw = params['yaw%i' % direction_id]
-        rotorDiameter = params['rotorDiameter']
-        Ct = params['Ct']
-        wind_speed = params['wind_speed']
+        turbineXw = inputs['turbineXw']
+        turbineYw = inputs['turbineYw']
+        turbineZ = inputs['hubHeight']
+        yaw = inputs['yaw%i' % direction_id]
+        rotorDiameter = inputs['rotorDiameter']
+        Ct = inputs['Ct']
+        wind_speed = inputs['wind_speed']
 
         use_ct_curve = self.use_ct_curve
         interp_type = self.interp_type
@@ -346,13 +337,13 @@ class GaussianWake(Component):
         # velocitiesTurbines = _porteagel_analyze(turbineXw, turbineYw, turbineZ, rotorDiameter,
         #                    Ct, axialInduction, wind_speed, yaw, ky, kz, alpha, beta, I)
         # print 'velocities: ', velocitiesTurbines
-        unknowns['wtVelocity%i' % direction_id] = velocitiesTurbines
+        outputs['wtVelocity%i' % direction_id] = velocitiesTurbines
 
         if nSamples > 0.0:
 
-            velX = params['wsPositionXw']
-            velY = params['wsPositionYw']
-            velZ = params['wsPositionZ']
+            velX = inputs['wsPositionXw']
+            velY = inputs['wsPositionYw']
+            velZ = inputs['wsPositionZ']
 
             # ws_array = porteagel_visualize(nTurbines, nSamples, turbineXw, turbineYw, turbineZ, velX, velY, velZ, rotorDiameter,
             #                                Ct, axialInduction, wind_speed, np.copy(yaw), ky, kz, alpha, beta, I)
@@ -368,53 +359,53 @@ class GaussianWake(Component):
                                                    wec_factor, wake_model_version, interp_type, use_ct_curve,
                                                    ct_curve_wind_speed, ct_curve_ct, sm_smoothing, exp_rate_multiplier)
 
-            unknowns['wsArray%i' % direction_id] = ws_array
+            outputs['wsArray%i' % direction_id] = ws_array
 
 
-    def linearize(self, params, unknowns, resids):
+    def compute_partials(self, inputs, partials):
 
         # obtain id for this wind direction
         direction_id = self.direction_id
 
         # x and y positions w.r.t. the wind dir. (wind dir. = +x)
-        turbineXw = params['turbineXw']
-        turbineYw = params['turbineYw']
-        turbineZ = params['hubHeight']
+        turbineXw = inputs['turbineXw']
+        turbineYw = inputs['turbineYw']
+        turbineZ = inputs['hubHeight']
 
         # yaw wrt wind dir. (wind dir. = +x)
-        yawDeg = params['yaw%i' % self.direction_id]
+        yawDeg = inputs['yaw%i' % self.direction_id]
 
         # turbine specs
-        rotorDiameter = params['rotorDiameter']
+        rotorDiameter = inputs['rotorDiameter']
 
         # air flow
-        wind_speed = params['wind_speed']
-        Ct = params['Ct']
+        wind_speed = inputs['wind_speed']
+        Ct = inputs['Ct']
 
         # wake model parameters
-        ky = params['model_params:ky']
-        kz = params['model_params:kz']
-        alpha = params['model_params:alpha']
-        beta = params['model_params:beta']
-        I = params['model_params:I']
+        ky = inputs['model_params:ky']
+        kz = inputs['model_params:kz']
+        alpha = inputs['model_params:alpha']
+        beta = inputs['model_params:beta']
+        I = inputs['model_params:I']
 
-        wake_combination_method = params['model_params:wake_combination_method']
-        ti_calculation_method = params['model_params:ti_calculation_method']
-        calc_k_star = params['model_params:calc_k_star']
-        sort_turbs = params['model_params:sort']
-        RotorPointsY = params['model_params:RotorPointsY']
-        RotorPointsZ = params['model_params:RotorPointsZ']
-        z_ref = params['model_params:z_ref']
-        z_0 = params['model_params:z_0']
-        shear_exp = params['model_params:shear_exp']
+        wake_combination_method = inputs['model_params:wake_combination_method']
+        ti_calculation_method = inputs['model_params:ti_calculation_method']
+        calc_k_star = inputs['model_params:calc_k_star']
+        sort_turbs = inputs['model_params:sort']
+        RotorPointsY = inputs['model_params:RotorPointsY']
+        RotorPointsZ = inputs['model_params:RotorPointsZ']
+        z_ref = inputs['model_params:z_ref']
+        z_0 = inputs['model_params:z_0']
+        shear_exp = inputs['model_params:shear_exp']
 
-        wec_factor = params['model_params:wec_factor']
+        wec_factor = inputs['model_params:wec_factor']
 
-        wake_model_version = params['model_params:wake_model_version']
+        wake_model_version = inputs['model_params:wake_model_version']
 
-        sm_smoothing = params['model_params:sm_smoothing']
+        sm_smoothing = inputs['model_params:sm_smoothing']
 
-        exp_rate_multiplier = params['model_params:exp_rate_multiplier']
+        exp_rate_multiplier = inputs['model_params:exp_rate_multiplier']
 
         use_ct_curve = self.use_ct_curve
         interp_type = self.interp_type
@@ -559,44 +550,12 @@ class GaussianWake(Component):
 
         wtVelocityb_dyawd = wtVelocityb
 
-        # print(wtVelocityb_dxwd, wtVelocityb[1])
-        # print(wtVelocityb_dxwd.shape, wtVelocityb.shape)
-        # for i in np.arange(0, nDirs):
-        #     print(wtVelocityb_dxwd, wtVelocityb)
-        #     print(wtVelocityb_dxwd.shape, wtVelocityb.shape)
-        #     wtVelocityb_dxwd[:, i] = wtVelocityb[i]
-
-        # print("after calling gradients")
-
-        # quit()
-        # print(wtVelocityb.shape)
-
-        # print(wtVelocityb)
-
-        # quit()
-
-        # initialize Jacobian dict
-        J = {}
-
-        # # collect values of the Jacobian
-        # J['wtVelocity%i' % direction_id, 'turbineXw'] = wtVelocityb[0, :]
-        # J['wtVelocity%i' % direction_id, 'turbineYw'] = wtVelocityb[1, :]
-        # J['wtVelocity%i' % direction_id, 'hubHeight'] = wtVelocityb[2, :]
-        # J['wtVelocity%i' % direction_id, 'yaw%i' % direction_id] = wtVelocityb[3, :]
-        # J['wtVelocity%i' % direction_id, 'rotorDiameter'] = wtVelocityb[4, :]
-        # J['wtVelocity%i' % direction_id, 'Ct'] = wtVelocityb[5, :]
-        # print J
-
-        # print("shapes")
-        # print(wtVelocityb)
-        # print(wtVelocityb_dxwd)
-
-        J['wtVelocity%i' % direction_id, 'turbineXw'] = np.transpose(wtVelocityb_dxwd[1])
-        J['wtVelocity%i' % direction_id, 'turbineYw'] = np.transpose(wtVelocityb_dywd[1])
-        J['wtVelocity%i' % direction_id, 'hubHeight'] = np.transpose(wtVelocityb_dzd[1])
-        J['wtVelocity%i' % direction_id, 'yaw%i' % direction_id] = np.transpose(wtVelocityb_dyawd[1])
-        J['wtVelocity%i' % direction_id, 'rotorDiameter'] = np.transpose(wtVelocityb_drd[1])
-        J['wtVelocity%i' % direction_id, 'Ct'] = np.transpose(wtVelocityb_dctd[1])
+        partials['wtVelocity%i' % direction_id, 'turbineXw'] = np.transpose(wtVelocityb_dxwd[1])
+        partials['wtVelocity%i' % direction_id, 'turbineYw'] = np.transpose(wtVelocityb_dywd[1])
+        partials['wtVelocity%i' % direction_id, 'hubHeight'] = np.transpose(wtVelocityb_dzd[1])
+        partials['wtVelocity%i' % direction_id, 'yaw%i' % direction_id] = np.transpose(wtVelocityb_dyawd[1])
+        partials['wtVelocity%i' % direction_id, 'rotorDiameter'] = np.transpose(wtVelocityb_drd[1])
+        partials['wtVelocity%i' % direction_id, 'Ct'] = np.transpose(wtVelocityb_dctd[1])
         # print J
 
         return J
@@ -633,8 +592,8 @@ if __name__ == "__main__":
     turbineY = np.array([0.0, 0.0])
 
     prob = Problem()
-    prob.root = Group()
-    prob.root.add('model', GaussianWake(nTurbines), promotes=['*'])
+    model = prob.model
+    model.add_subsystem('model', GaussianWake(nTurbines), promotes_inputs=['*'])
 
     prob.setup()
 
@@ -650,7 +609,7 @@ if __name__ == "__main__":
         prob['yaw0'] = np.array([yaw1, 0.0])
         prob['Ct'] = Ct*np.cos(prob['yaw0']*np.pi/180.)**2
 
-        prob.run()
+        prob.run_model()
 
         velocitiesTurbines = prob['wtVelocity0']
 
@@ -675,7 +634,7 @@ if __name__ == "__main__":
 
         prob['turbineYw'] = np.array([0.0, pos2])
 
-        prob.run()
+        prob.run_model()
 
         velocitiesTurbines = prob['wtVelocity0']
 
@@ -701,7 +660,7 @@ if __name__ == "__main__":
         prob['turbineXw'] = np.array([0.0, pos2])
         prob['turbineYw'] = np.array([0.0, 0.0])
 
-        prob.run()
+        prob.run_model()
 
         velocitiesTurbines = prob['wtVelocity0']
 
